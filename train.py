@@ -134,7 +134,8 @@ def parse_comma_separated_list(s):
 # Optional features.
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
 @click.option('--mirror',       help='Enable dataset x-flips', metavar='BOOL',                  type=bool, default=False, show_default=True)
-@click.option('--aug',          help='Augmentation mode',                                       type=click.Choice(['noaug', 'ada', 'fixed']), default='ada', show_default=True)
+# For phased paper, added 'phased' and 'normal' to the following type.
+@click.option('--aug',          help='Augmentation mode',                                       type=click.Choice(['noaug', 'ada', 'fixed', 'phased', 'normal', 'noaug_zoom']), default='phased', show_default=True)
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 @click.option('--freezed',      help='Freeze first layers of D', metavar='INT',                 type=click.IntRange(min=0), default=0, show_default=True)
 
@@ -160,6 +161,15 @@ def parse_comma_separated_list(s):
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--workers',      help='DataLoader worker processes', metavar='INT',              type=click.IntRange(min=1), default=3, show_default=True)
 @click.option('-n','--dry-run', help='Print training options and exit',                         is_flag=True)
+
+# Phased augmentation parameters.
+@click.option('--rot',          help='Max integer for rotation', metavar='INT',                 type=click.IntRange(min=0, max=180), default=180, show_default=True)
+@click.option('--zoom_shift',   help='Bool to enable up-scaling and cropping', metavar='BOOL',  type=bool, default=True, show_default=True)
+@click.option('--color',        help='Color conversion intensity value', metavar='FLOAT',       type=click.FloatRange(min=0.0, max=1.0), default=0.3, show_default=True)
+@click.option('--flip',         help='Bool to enable xflip',             metavar='BOOL',        type=bool, default=True, show_default=True)
+
+# Phased, zoom dataset for validation.
+@click.option('--zoom_data',    help='Path to use zoomed data for validation', metavar='STR',   type=str, default='', show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -200,6 +210,9 @@ def main(**kwargs):
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
     c.training_set_kwargs.xflip = opts.mirror
+    # For phased, 
+    if opts.zoom_data != '':
+        c.zoom_data = opts.zoom_data
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus
@@ -251,7 +264,17 @@ def main(**kwargs):
             c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
 
     # Augmentation.
-    if opts.aug != 'noaug':
+    # For phsed paper, added a 'phase' condition.
+    if opts.aug == 'phased':
+            print('phased')
+            c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
+    elif opts.aug == 'normal':
+            print('normal')
+            c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased.AugmentPipe', rot=180, zoom_shift=True, color=0.15, flip=True)
+    elif opts.aug == 'noaug_zoom':
+            print('noaug_zoom')
+            c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased.AugmentPipe', rot=0, zoom_shift=False, color=0.0, flip=False)
+    elif opts.aug != 'noaug':
         c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment.AugmentPipe', xflip=1, rotate90=1, xint=1, scale=1, rotate=1, aniso=1, xfrac=1, brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1)
         if opts.aug == 'ada':
             c.ada_target = opts.target

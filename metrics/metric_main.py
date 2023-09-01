@@ -88,10 +88,38 @@ def fid50k_full(opts):
     fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=50000)
     return dict(fid50k_full=fid)
 
+# for phased paper, change rem_gen to 5000
+@register_metric
+def fid5k_full(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False)
+    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=5000)
+    return dict(fid50k_full=fid)
+
+# for phased paper, change rem_gen to 5000, zoomed data npy
+@register_metric
+def fid5k_full_zoom(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False, path=opts.zoom_data, class_name='training.dataset_phased.NpyDataset')
+    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=5000)
+    return dict(fid50k_full=fid)
+
 @register_metric
 def kid50k_full(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
     kid = kernel_inception_distance.compute_kid(opts, max_real=1000000, num_gen=50000, num_subsets=100, max_subset_size=1000)
+    return dict(kid50k_full=kid)
+
+# for phaesd paper, change rem_gen to 5000
+@register_metric
+def kid5k_full(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False)
+    kid = kernel_inception_distance.compute_kid(opts, max_real=1000000, num_gen=5000, num_subsets=100, max_subset_size=1000)
+    return dict(kid50k_full=kid)
+
+# for phased paper, change rem_gen to 5000, zoomed data npy
+@register_metric
+def kid5k_full_zoom(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False, path=opts.zoom_data, class_name='training.dataset_phased.NpyDataset')
+    kid = kernel_inception_distance.compute_kid(opts, max_real=1000000, num_gen=5000, num_subsets=100, max_subset_size=1000)
     return dict(kid50k_full=kid)
 
 @register_metric
