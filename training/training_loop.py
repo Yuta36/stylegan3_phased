@@ -121,6 +121,7 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     zoom_data               = '',       # For phased, zoomed ref data path for validation 
+    auto_phase              = False,    # For phased, automatically set phase parmarameters
 ):
     # Initialize.
     start_time = time.time()
@@ -174,14 +175,22 @@ def training_loop(
         print('Setting up augmentation...')
     augment_pipe = None
     ada_stats = None
-    # For phased paper, setted a condtion for --aug of 'phased' or 'normal', 'noaug_zoom'.
-    if augment_kwargs.class_name == 'training.augment_phased.AugmentPipe':
-        augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
-    elif (augment_kwargs is not None) and (augment_p > 0 or ada_target is not None):
-        augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
-        augment_pipe.p.copy_(torch.as_tensor(augment_p))
-        if ada_target is not None:
-            ada_stats = training_stats.Collector(regex='Loss/signs/real')
+    # For phased paper, setted a condtion for --aug of 'phased' or 'normal', 'noaug_zoom', 'phased_modified'...
+    if augment_kwargs is not None:
+        if augment_kwargs.class_name in [
+            'training.augment_phased.AugmentPipe',
+            'training.augment_phased_modified.AugmentPipe',
+            'training.augment_phased_modified2.AugmentPipe', 
+            'training.augment_phased_modified3.AugmentPipe', 
+            'training.augment_phased_modified4.AugmentPipe',
+            'training.augment_phased_modified5.AugmentPipe',
+            'training.DiffAugment_pytorch.AugmentPipe']:
+            augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+        elif (augment_kwargs is not None) and (augment_p > 0 or ada_target is not None):
+            augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+            augment_pipe.p.copy_(torch.as_tensor(augment_p))
+            if ada_target is not None:
+                ada_stats = training_stats.Collector(regex='Loss/signs/real')
 
     # Distribute across GPUs.
     if rank == 0:
@@ -255,6 +264,24 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
+
+    # For phased paper,
+    if auto_phase:
+        print('auto phase')
+        phase_base_kimg = total_kimg // 5 
+        
+        if phase_base_kimg % (kimg_per_tick * image_snapshot_ticks) != 0:
+            raise ValueError("phase_base_kimg must be a multiple of kimg_per_tick * image_snapshot_ticks.")
+        
+        else:
+            print("Phase_base_kimg is a multiple of kimg_per_tick * image_snapshot_ticks.")
+
+        phase2_executed = False
+        phase3_executed = False
+        phase4_executed = False
+        phase5_executed = False
+        phase6_executed = False
+
     while True:
 
         # Fetch training data.
@@ -413,6 +440,42 @@ def training_loop(
             for name, value in stats_metrics.items():
                 stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
             stats_tfevents.flush()
+
+            # For phased paper, update phased parameters.
+            # NOTE: This update must be done after caluculating metrics,
+            #       because changed augmented distribution affect the validation badly.
+   
+            if auto_phase:
+                # phase2
+                if not phase2_executed and cur_nimg >= phase_base_kimg * 1 * 1000:
+                    print(cur_nimg, "phase2")
+                    augment_pipe.rot.copy_(torch.tensor(18, device=augment_pipe.rot.device))
+                    phase2_executed = True
+
+                # phase3
+                if not phase3_executed and cur_nimg >= phase_base_kimg * 2 * 1000:
+                    print(cur_nimg, "phase3")
+                    augment_pipe.rot.copy_(torch.tensor(0, device=augment_pipe.rot.device))
+                    phase3_executed = True
+
+                # phase4
+                if not phase4_executed and cur_nimg >= phase_base_kimg * 3 * 1000:
+                    print(cur_nimg, "phase4")
+                    augment_pipe.zoom_shift.copy_(torch.tensor(False, device=augment_pipe.zoom_shift.device))
+                    phase4_executed = True
+
+                # phase5
+                if not phase5_executed and cur_nimg >= phase_base_kimg * 4 * 1000:
+                    print(cur_nimg, "phase5")
+                    augment_pipe.color.copy_(torch.tensor(0.15, device=augment_pipe.color.device))
+                    phase5_executed = True
+
+                # phase6
+                if not phase6_executed and cur_nimg >= phase_base_kimg * 4.5 * 1000:
+                    print(cur_nimg, "phase6")
+                    augment_pipe.color.copy_(torch.tensor(0.0, device=augment_pipe.color.device))
+                    phase6_executed = True
+
         if progress_fn is not None:
             progress_fn(cur_nimg // 1000, total_kimg)
 

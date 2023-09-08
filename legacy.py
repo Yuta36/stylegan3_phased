@@ -150,6 +150,8 @@ def convert_tf_generator(tf_G):
     kwarg('structure')
     kwarg('conditioning')
     kwarg('fused_modconv')
+    # For phased paer, to load data-efficient-gans pretraine model.
+    kwarg('impl')
     unknown_kwargs = list(set(tf_kwargs.keys()) - known_kwargs)
     if len(unknown_kwargs) > 0:
         raise ValueError('Unknown TensorFlow kwarg', unknown_kwargs[0])
