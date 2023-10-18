@@ -135,7 +135,7 @@ def parse_comma_separated_list(s):
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
 @click.option('--mirror',       help='Enable dataset x-flips', metavar='BOOL',                  type=bool, default=False, show_default=True)
 # For phased paper, added 'phased' and 'normal' to the following type.
-@click.option('--aug',          help='Augmentation mode',                                       type=click.Choice(['noaug', 'ada', 'fixed', 'phased', 'normal', 'noaug_zoom', 'phased_modified', 'phased_modified2', 'phased_modified3', 'phased_modified4', 'phased_modified5', 'diffaug']), default='phased', show_default=True)
+@click.option('--aug',          help='Augmentation mode',                                       type=click.Choice(['noaug', 'ada', 'fixed', 'phased', 'normal', 'noaug_zoom', 'phased_modified', 'phased_modified2', 'phased_modified3', 'phased_modified4', 'phased_modified5', 'phased_modified6', 'phased_modified3_1', 'phased_modified3_1_1', 'phased_modified3_2', 'diffaug', 'phased_modified3_color', 'phased0_1']), default='phased', show_default=True)
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 @click.option('--freezed',      help='Freeze first layers of D', metavar='INT',                 type=click.IntRange(min=0), default=0, show_default=True)
 
@@ -167,7 +167,7 @@ def parse_comma_separated_list(s):
 @click.option('--zoom_shift',   help='Bool to enable up-scaling and cropping', metavar='BOOL',  type=bool, default=True, show_default=True)
 @click.option('--color',        help='Color conversion intensity value', metavar='FLOAT',       type=click.FloatRange(min=0.0, max=1.0), default=0.3, show_default=True)
 @click.option('--flip',         help='Bool to enable xflip',             metavar='BOOL',        type=bool, default=True, show_default=True)
-@click.option('--cutout',       help='Cutout size value. 0.0 disenables it',metavar='FLOAT',    type=click.FloatRange(min=0.0, max=1.0), default=0.0, show_default=True)
+@click.option('--cutout',       help='Cutout probability. 0.0 disenables it',metavar='FLOAT',   type=click.FloatRange(min=0.0, max=1.0), default=0.0, show_default=True)
 
 # Phased, zoom dataset for validation.
 @click.option('--zoom_data',    help='Path to use zoomed data for validation', metavar='STR',   type=str, default='', show_default=True)
@@ -177,6 +177,8 @@ def parse_comma_separated_list(s):
 
 # Phased, 
 @click.option('--auto_phase',   help='Enable auto phase', metavar='BOOL',                        type=bool, default=False, show_default=True)
+@click.option('--init_opt_ema', help='Initialize emas of optimizers in a phase', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--use_adamw', help='Use AdamW insted of Adam.', metavar='BOOL',                   type=bool, default=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -206,8 +208,13 @@ def main(**kwargs):
     c = dnnlib.EasyDict() # Main config dict.
     c.G_kwargs = dnnlib.EasyDict(class_name=None, z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict())
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
-    c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
+    # For phased paper, added an AdamW setting.
+    if opts.use_adamw:
+        c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.AdamW', betas=[0,0.99], eps=1e-8)
+        c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.AdamW', betas=[0,0.99], eps=1e-8)
+    else:
+        c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
+        c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     # For phsed paper, apply augmentation to only real data 
     if opts.only_real:
         c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss_only_real.StyleGAN2Loss')
@@ -226,6 +233,7 @@ def main(**kwargs):
     if opts.zoom_data != '':
         c.zoom_data = opts.zoom_data
     c.auto_phase = opts.auto_phase
+    c.init_opt_ema = opts.init_opt_ema
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus
@@ -281,6 +289,9 @@ def main(**kwargs):
     if opts.aug == 'phased':
             print('phased')
             c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
+    elif opts.aug == 'phased0_1':
+            print('phased0_1')
+            c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased0_1.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
     elif opts.aug == 'phased_modified':
         print('phased_modified')
         c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
@@ -296,6 +307,21 @@ def main(**kwargs):
     elif opts.aug == 'phased_modified5':
         print('phased_modified5')
         c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified5.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True, cutout=opts.cutout)
+    elif opts.aug == 'phased_modified6':
+        print('phased_modified6')
+        c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified6.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True, cutout=opts.cutout)
+    elif opts.aug == 'phased_modified3_1':
+        print('phased_modified3_1')
+        c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified3_1.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
+    elif opts.aug == 'phased_modified3_1_1':
+        print('phased_modified3_1_1')
+        c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified3_1_1.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
+    elif opts.aug == 'phased_modified3_2':
+        print('phased_modified3_2')
+        c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified3_2.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
+    elif opts.aug == 'phased_modified3_color':
+        print('phased_modified3_color')
+        c.augment_kwargs = dnnlib.EasyDict(class_name='training.augment_phased_modified3_color.AugmentPipe', rot=opts.rot, zoom_shift=opts.zoom_shift, color=opts.color, flip=True)
     elif opts.aug == 'diffaug':
         print('diffaug')
         diffaugment = 'color,translation,cutout'

@@ -85,6 +85,17 @@ def save_image_grid(img, fname, drange, grid_size):
     if C == 3:
         PIL.Image.fromarray(img, 'RGB').save(fname)
 
+# For phased paper, initialize optimizer's ema (Adam or AdamW)
+def initialize_optimizer_ema(optimizer):
+    for group in optimizer.param_groups:
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            state = optimizer.state[p]
+            state['exp_avg'] = torch.zeros_like(p.data)
+            state['exp_avg_sq'] = torch.zeros_like(p.data)
+    return optimizer
+
 #----------------------------------------------------------------------------
 
 def training_loop(
@@ -122,6 +133,7 @@ def training_loop(
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     zoom_data               = '',       # For phased, zoomed ref data path for validation 
     auto_phase              = False,    # For phased, automatically set phase parmarameters
+    init_opt_ema            = False,    # For phased, initialize optimizer's ema in a phase 
 ):
     # Initialize.
     start_time = time.time()
@@ -179,11 +191,17 @@ def training_loop(
     if augment_kwargs is not None:
         if augment_kwargs.class_name in [
             'training.augment_phased.AugmentPipe',
+            'training.augment_phased0_1.AugmentPipe',
             'training.augment_phased_modified.AugmentPipe',
             'training.augment_phased_modified2.AugmentPipe', 
             'training.augment_phased_modified3.AugmentPipe', 
             'training.augment_phased_modified4.AugmentPipe',
             'training.augment_phased_modified5.AugmentPipe',
+            'training.augment_phased_modified6.AugmentPipe',
+            'training.augment_phased_modified3_1.AugmentPipe', 
+            'training.augment_phased_modified3_1_1.AugmentPipe',
+            'training.augment_phased_modified3_2.AugmentPipe', 
+            'training.augment_phased_modified3_color.AugmentPipe', 
             'training.DiffAugment_pytorch.AugmentPipe']:
             augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
         elif (augment_kwargs is not None) and (augment_p > 0 or ada_target is not None):
@@ -450,30 +468,50 @@ def training_loop(
                 if not phase2_executed and cur_nimg >= phase_base_kimg * 1 * 1000:
                     print(cur_nimg, "phase2")
                     augment_pipe.rot.copy_(torch.tensor(18, device=augment_pipe.rot.device))
+                    if init_opt_ema:
+                        print('Initialize the emas of the optimizers.')
+                        for phase in phases:
+                            phase.opt = initialize_optimizer_ema(phase.opt)
                     phase2_executed = True
 
                 # phase3
                 if not phase3_executed and cur_nimg >= phase_base_kimg * 2 * 1000:
                     print(cur_nimg, "phase3")
                     augment_pipe.rot.copy_(torch.tensor(0, device=augment_pipe.rot.device))
+                    if init_opt_ema:
+                        print('Initialize the emas of the optimizers.')
+                        for phase in phases:
+                            phase.opt = initialize_optimizer_ema(phase.opt)
                     phase3_executed = True
 
                 # phase4
                 if not phase4_executed and cur_nimg >= phase_base_kimg * 3 * 1000:
                     print(cur_nimg, "phase4")
                     augment_pipe.zoom_shift.copy_(torch.tensor(False, device=augment_pipe.zoom_shift.device))
+                    if init_opt_ema:
+                        print('Initialize the emas of the optimizers.')
+                        for phase in phases:
+                            phase.opt = initialize_optimizer_ema(phase.opt)
                     phase4_executed = True
 
                 # phase5
                 if not phase5_executed and cur_nimg >= phase_base_kimg * 4 * 1000:
                     print(cur_nimg, "phase5")
                     augment_pipe.color.copy_(torch.tensor(0.15, device=augment_pipe.color.device))
+                    if init_opt_ema:
+                        print('Initialize the emas of the optimizers.')
+                        for phase in phases:
+                            phase.opt = initialize_optimizer_ema(phase.opt)
                     phase5_executed = True
 
                 # phase6
                 if not phase6_executed and cur_nimg >= phase_base_kimg * 4.5 * 1000:
                     print(cur_nimg, "phase6")
                     augment_pipe.color.copy_(torch.tensor(0.0, device=augment_pipe.color.device))
+                    if init_opt_ema:
+                        print('Initialize the emas of the optimizers.')
+                        for phase in phases:
+                            phase.opt = initialize_optimizer_ema(phase.opt)
                     phase6_executed = True
 
         if progress_fn is not None:

@@ -20,7 +20,8 @@ import numpy as np
 
 
 """ Phased (normal) augmentaion 
-NOTE: This code is for 256*256 traning data 
+modefided3_1 → modified3_2: changed any direction aisoscaling
+NOTE: This code is for 256*256 traning data.
 """
 
 def matrix(*rows, device=None):
@@ -58,73 +59,87 @@ class AugmentPipe(torch.nn.Module):
         batch_size, num_channels, height, width = images.shape
         device = images.device
 
-        ###rotate 
-        # NOTE: bilinear, fill=none (this border mode is not same as my cv2 implemention 
+        ###flip
+        # Modified3_1, changed random parameters in a minibatch
+        if self.flip:
+            flip = torch.rand(batch_size, device=device) > 0.5
+        else:
+            flip = torch.zeros(batch_size, device=device, dtype=torch.bool)
 
-        # Modified
+        flipped_images = torch.flip(images.clone(), [3])
+        images = torch.where(flip[:, None, None, None], flipped_images, images)
+
+        ###zoom shift (upsampling and random cropping)
+        # Modified2, 3
+        # Modified3_1, changed random parameters in a minibatch
+        if self.zoom_shift == True:
+
+            # Modified3_2, changed any direction aisoscaling
+            I_3 = torch.eye(3, device=device)
+            theta = (torch.rand(batch_size, device=device) * 2 - 1) * 45 * (np.pi / 180.0)
+            G_inv = I_3 @ rotate2d_inv(-theta) 
+            shape = [batch_size, num_channels, height, width]
+            grid = torch.nn.functional.affine_grid(theta=G_inv[:,:2,:], size=shape, align_corners=False)
+            images = grid_sample_gradfix.grid_sample(images, grid)
+            
+            # NOTE: This size is sampled under uniform distribution.
+            #       To equalize the probability of getting a size of 256 pixels with other sizes, I subtract 0.5 pixels.
+            sizes = torch.round(height * (torch.rand(batch_size, 2, device=device) / 4 + 1.0) - 0.5).long()#1.0 ~ 1.25 times (256 ~ (320 - 1))
+
+            # NOTE: This range length is smaller than the value of (size[0] - 256).
+            #       If odd max_shift value is used, the range should be open interval to avoid a cropping error.
+            max_shifts = sizes - 256
+            values_to_exclude_endpoints = torch.tensor([0.00001, 0.00001], device=device).unsqueeze(0).repeat(batch_size, 1)
+            # Modified3
+            shift_ranges = max_shifts - values_to_exclude_endpoints
+            shifts = torch.round(torch.rand(batch_size, 2, device=device) * shift_ranges - shift_ranges / 2).long()
+
+            for i in range(batch_size):
+                img = images[i].unsqueeze(0)
+                # NOTE: bilinear
+                img = F.interpolate(img, size=(sizes[i, 0].item(), sizes[i, 1].item()), mode='bilinear', align_corners=True)
+                sh = ((sizes[i, 0] - 256) // 2 + shifts[i, 0]).item()
+                sw = ((sizes[i, 1] - 256) // 2 + shifts[i, 1]).item()
+            
+                img = img[:, :, sh:sh+height, sw:sw+width]
+
+                images[i] = img.squeeze(0)
+
+        ###rotate (and center crop, upsampling)
+        # NOTE: bilinear, fill=none (this border mode is not same as my cv2 implemention 
+        # in tf VQ-VAE-2 code, but the border does not apper because of upsampling and cropping)
+
+        # Modified3_2, change the order to rotate after zoom
         if self.rot != 0:
             I_3 = torch.eye(3, device=device)
-            G_inv = I_3
 
-            theta_single = (torch.rand(1, device=device) * 2 - 1) * self.rot * (np.pi / 180.0)
-            theta = theta_single.repeat(batch_size)
-            G_inv = G_inv @ rotate2d_inv(-theta) 
+            # Modified3_1, changed random parameters in a minibatch
+            theta = (torch.rand(batch_size, device=device) * 2 - 1) * self.rot * (np.pi / 180.0)
+            G_inv = I_3 @ rotate2d_inv(-theta) 
 
             shape = [batch_size, num_channels, height, width]
             grid = torch.nn.functional.affine_grid(theta=G_inv[:,:2,:], size=shape, align_corners=False)
             images = grid_sample_gradfix.grid_sample(images, grid)
-
-        # Modified, no zoom
-        # images = images[:, :, 37:(256-38), 37:(256-38)]
-        # # NOTE: bilinear
-        # images = F.interpolate(images, size=(256, 256), mode='bilinear', align_corners=True)
-
-        ###flip
-        if self.flip:
-            flip = (torch.rand(1) > 0.5).item()
-        else:
-            flip = 0
-
-        if flip:
-            images = torch.flip(images, [3])
-
-        ###zoom shift (upsampling and random cropping)
-        # Modified2, 3
-        if self.zoom_shift == True:
-            
-            # NOTE: This size is sampled under uniform distribution.
-            #       To equalize the probability of getting a size of 256 pixels with other sizes, I subtract 0.5 pixels.
-            size = torch.round(height * (torch.rand(2, device=device) / 4 + 1.0) - 0.5).long()#1.0 ~ 1.25 times (256 ~ (320 - 1))
-            
-            # NOTE: bilinear
-            images = F.interpolate(images, size=(size[0], size[1]), mode='bilinear', align_corners=True)
-
-            # NOTE: This range length is smaller than the value of (size[0] - 256).
-            #       If odd max_shift value is used, the range should be open interval to avoid a cropping error.
-            max_shift = size - 256
-            value_to_exclude_endpoints = torch.tensor([0.00001, 0.00001], device=device)
-            # Modified3
-            shift_range = max_shift - value_to_exclude_endpoints
-            shift = torch.round(torch.rand(2, device=device) * shift_range - shift_range / 2).long()
-            
-            sh = torch.round((size[0] - 256) // 2 + shift[0]).item()
-            sw = torch.round((size[1] - 256) // 2 + shift[1]).item()
-            
-            images = images[:, :, sh:sh+height, sw:sw+height]
     
         ###brightness
-        delta = (torch.rand(1, device=device) * 2 - 1) * self.color
+        # Modified3_1, changed random parameters in a minibatch
+        delta = (torch.rand(batch_size, 1, 1, 1, device=device) * 2 - 1) * self.color
         images = images + delta
 
+
         ###saturation
-        magnitude = (torch.rand(1, 1, 1, 1, device=device) * 2 - 1) * self.color + 1
+        # Modified3_1, changed random parameters in a minibatch
+        magnitude = (torch.rand(batch_size, 1, 1, 1, device=device) * 2 - 1) * self.color + 1
         x_mean = images.mean(dim=1, keepdim=True)
         images = (images - x_mean) * magnitude + x_mean
 
+
         ###contrast
-        magnitude = (torch.rand(1, 1, 1, 1, device=device) * 2 - 1) * self.color + 1
+        # Modified3_1, changed random parameters in a minibatch
+        magnitude = (torch.rand(batch_size, 1, 1, 1, device=device) * 2 - 1) * self.color + 1
         x_mean = images.mean(dim=[1, 2, 3], keepdim=True)
         images = (images - x_mean) * magnitude + x_mean
+
         # print("After contrast adjustment, requires_grad:", images.requires_grad)
 
         return images

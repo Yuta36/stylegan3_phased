@@ -21,6 +21,7 @@ import numpy as np
 
 """ Phased (normal) augmentaion 
 NOTE: This code is for 256*256 traning data 
+modified3 → modified3_color: brightness range is adjusted for input -1~1 pixels
 """
 
 def matrix(*rows, device=None):
@@ -58,8 +59,9 @@ class AugmentPipe(torch.nn.Module):
         batch_size, num_channels, height, width = images.shape
         device = images.device
 
-        ###rotate 
+        ###rotate (and center crop, upsampling)
         # NOTE: bilinear, fill=none (this border mode is not same as my cv2 implemention 
+        # in tf VQ-VAE-2 code, but the border does not apper because of upsampling and cropping)
 
         # Modified
         if self.rot != 0:
@@ -76,6 +78,7 @@ class AugmentPipe(torch.nn.Module):
 
         # Modified, no zoom
         # images = images[:, :, 37:(256-38), 37:(256-38)]
+
         # # NOTE: bilinear
         # images = F.interpolate(images, size=(256, 256), mode='bilinear', align_corners=True)
 
@@ -113,7 +116,8 @@ class AugmentPipe(torch.nn.Module):
             images = images[:, :, sh:sh+height, sw:sw+height]
     
         ###brightness
-        delta = (torch.rand(1, device=device) * 2 - 1) * self.color
+        # modified3_color: *2
+        delta = (torch.rand(1, device=device) * 2 - 1) * self.color * 2
         images = images + delta
 
         ###saturation

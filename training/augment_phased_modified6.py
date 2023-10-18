@@ -20,6 +20,7 @@ import numpy as np
 
 
 """ Phased (normal) augmentaion 
+modified4 → modified6: probabilitically apply cutout, change the role of self.cutout to control the probability
 NOTE: This code is for 256*256 traning data 
 """
 
@@ -43,23 +44,44 @@ def rotate2d(theta, **kwargs):
 def rotate2d_inv(theta, **kwargs):
     return rotate2d(-theta, **kwargs)
 
+# Phased modified 4
+# This rand_cutout function is from "Data-Efficient GANs with DiffAugment" (Pytorch)
+# https://github.com/mit-han-lab/data-efficient-gans/blob/master/DiffAugment-stylegan2-pytorch/DiffAugment_pytorch.py
+def rand_cutout(x, ratio=0.5):
+    cutout_size = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5)
+    offset_x = torch.randint(0, x.size(2) + (1 - cutout_size[0] % 2), size=[x.size(0), 1, 1], device=x.device)
+    offset_y = torch.randint(0, x.size(3) + (1 - cutout_size[1] % 2), size=[x.size(0), 1, 1], device=x.device)
+    grid_batch, grid_x, grid_y = torch.meshgrid(
+        torch.arange(x.size(0), dtype=torch.long, device=x.device),
+        torch.arange(cutout_size[0], dtype=torch.long, device=x.device),
+        torch.arange(cutout_size[1], dtype=torch.long, device=x.device),
+    )
+    grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2, min=0, max=x.size(2) - 1)
+    grid_y = torch.clamp(grid_y + offset_y - cutout_size[1] // 2, min=0, max=x.size(3) - 1)
+    mask = torch.ones(x.size(0), x.size(2), x.size(3), dtype=x.dtype, device=x.device)
+    mask[grid_batch, grid_x, grid_y] = 0
+    x = x * mask.unsqueeze(1)
+    return x
+
 @persistence.persistent_class
 class AugmentPipe(torch.nn.Module):
-    def __init__(self, rot=180, zoom_shift=True, color=0.3, flip=True):
+    def __init__(self, rot=180, zoom_shift=True, color=0.3, flip=True, cutout=0.0):
         super().__init__()
         self.register_buffer('p', torch.ones([]))       # This in not used
         self.register_buffer('rot', torch.tensor(rot).float())
         self.register_buffer('zoom_shift', torch.tensor(zoom_shift).bool())
         self.register_buffer('color', torch.tensor(color).float()) 
         self.register_buffer('flip', torch.tensor(flip).bool())
+        self.register_buffer('cutout', torch.tensor(cutout).float()) 
 
     def forward(self, images, debug_percentile=None):
         assert isinstance(images, torch.Tensor) and images.ndim == 4
         batch_size, num_channels, height, width = images.shape
         device = images.device
 
-        ###rotate 
+        ###rotate (and center crop, upsampling)
         # NOTE: bilinear, fill=none (this border mode is not same as my cv2 implemention 
+        # in tf VQ-VAE-2 code, but the border does not apper because of upsampling and cropping)
 
         # Modified
         if self.rot != 0:
@@ -76,6 +98,7 @@ class AugmentPipe(torch.nn.Module):
 
         # Modified, no zoom
         # images = images[:, :, 37:(256-38), 37:(256-38)]
+
         # # NOTE: bilinear
         # images = F.interpolate(images, size=(256, 256), mode='bilinear', align_corners=True)
 
@@ -127,6 +150,14 @@ class AugmentPipe(torch.nn.Module):
         images = (images - x_mean) * magnitude + x_mean
         # print("After contrast adjustment, requires_grad:", images.requires_grad)
 
+        # cutout 
+        # 0.5 → 0.0(disenable)
+        if self.cutout > 0.0:
+            apply_cutout = (torch.rand(1, device=self.cutout.device) < self.cutout).item()
+
+            if apply_cutout:
+                images = rand_cutout(images) 
+        
         return images
 
 #----------------------------------------------------------------------------

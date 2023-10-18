@@ -21,6 +21,8 @@ import numpy as np
 
 """ Phased (normal) augmentaion 
 NOTE: This code is for 256*256 traning data 
+
+augment_phased → augment_phased0_1: change brightness to brightness * 2, consistent with PC-VQ-2 experiments
 """
 
 def matrix(*rows, device=None):
@@ -48,36 +50,35 @@ class AugmentPipe(torch.nn.Module):
     def __init__(self, rot=180, zoom_shift=True, color=0.3, flip=True):
         super().__init__()
         self.register_buffer('p', torch.ones([]))       # This in not used
-        self.register_buffer('rot', torch.tensor(rot).float())
-        self.register_buffer('zoom_shift', torch.tensor(zoom_shift).bool())
-        self.register_buffer('color', torch.tensor(color).float()) 
-        self.register_buffer('flip', torch.tensor(flip).bool())
+        self.rot = rot
+        self.zoom_shift = zoom_shift
+        self.color = color 
+        self.flip = flip
 
     def forward(self, images, debug_percentile=None):
         assert isinstance(images, torch.Tensor) and images.ndim == 4
         batch_size, num_channels, height, width = images.shape
         device = images.device
 
-        ###rotate 
+        ###rotate (and center crop, upsampling)
         # NOTE: bilinear, fill=none (this border mode is not same as my cv2 implemention 
+        # in tf VQ-VAE-2 code, but the border does not apper because of upsampling and cropping)
 
-        # Modified
-        if self.rot != 0:
-            I_3 = torch.eye(3, device=device)
-            G_inv = I_3
+        I_3 = torch.eye(3, device=device)
+        G_inv = I_3
 
-            theta_single = (torch.rand(1, device=device) * 2 - 1) * self.rot * (np.pi / 180.0)
-            theta = theta_single.repeat(batch_size)
-            G_inv = G_inv @ rotate2d_inv(-theta) 
+        theta_single = (torch.rand(1, device=device) * 2 - 1) * self.rot * (np.pi / 180.0)
+        theta = theta_single.repeat(batch_size)
+        G_inv = G_inv @ rotate2d_inv(-theta) 
 
-            shape = [batch_size, num_channels, height, width]
-            grid = torch.nn.functional.affine_grid(theta=G_inv[:,:2,:], size=shape, align_corners=False)
-            images = grid_sample_gradfix.grid_sample(images, grid)
+        shape = [batch_size, num_channels, height, width]
+        grid = torch.nn.functional.affine_grid(theta=G_inv[:,:2,:], size=shape, align_corners=False)
+        images = grid_sample_gradfix.grid_sample(images, grid)
 
-        # Modified, no zoom
-        # images = images[:, :, 37:(256-38), 37:(256-38)]
-        # # NOTE: bilinear
-        # images = F.interpolate(images, size=(256, 256), mode='bilinear', align_corners=True)
+        images = images[:, :, 37:(256-38), 37:(256-38)]
+
+        # NOTE: bilinear
+        images = F.interpolate(images, size=(256, 256), mode='bilinear', align_corners=True)
 
         ###flip
         if self.flip:
@@ -89,31 +90,23 @@ class AugmentPipe(torch.nn.Module):
             images = torch.flip(images, [3])
 
         ###zoom shift (upsampling and random cropping)
-        # Modified2, 3
         if self.zoom_shift == True:
-            
-            # NOTE: This size is sampled under uniform distribution.
-            #       To equalize the probability of getting a size of 256 pixels with other sizes, I subtract 0.5 pixels.
-            size = torch.round(height * (torch.rand(2, device=device) / 4 + 1.0) - 0.5).long()#1.0 ~ 1.25 times (256 ~ (320 - 1))
+            size = torch.round(height * (torch.rand(2, device=device) / 4 + 1.05)).long()#1.05 ~ 1.30 times (269~)
             
             # NOTE: bilinear
             images = F.interpolate(images, size=(size[0], size[1]), mode='bilinear', align_corners=True)
 
             # NOTE: This range length is smaller than the value of (size[0] - 256).
-            #       If odd max_shift value is used, the range should be open interval to avoid a cropping error.
-            max_shift = size - 256
-            value_to_exclude_endpoints = torch.tensor([0.00001, 0.00001], device=device)
-            # Modified3
-            shift_range = max_shift - value_to_exclude_endpoints
-            shift = torch.round(torch.rand(2, device=device) * shift_range - shift_range / 2).long()
+            shift = torch.round(torch.rand(2, device=device) * 10 - 5).long()
             
             sh = torch.round((size[0] - 256) // 2 + shift[0]).item()
             sw = torch.round((size[1] - 256) // 2 + shift[1]).item()
             
             images = images[:, :, sh:sh+height, sw:sw+height]
-    
+
         ###brightness
-        delta = (torch.rand(1, device=device) * 2 - 1) * self.color
+        # modified3_color: *2
+        delta = (torch.rand(1, device=device) * 2 - 1) * self.color * 2
         images = images + delta
 
         ###saturation
